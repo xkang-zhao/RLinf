@@ -74,7 +74,26 @@ from rlinf.models.embodiment.openpi.dataconfig.robotwin_aloha_dataconfig import 
     LeRobotAlohaDataConfig,
 )
 
+from rlinf.models.embodiment.openpi.dataconfig.autostack_dataconfig import (
+    LeRobotAutoStackDataConfig
+)
+
 _CONFIGS = [
+    TrainConfig(
+        name="pi05_auto_stack",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
+        data=LeRobotAutoStackDataConfig(
+            repo_id="/zxk/my_openpi/auto_stack",
+            assets=AssetsConfig(asset_id="/zxk/my_openpi/auto_stack"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        batch_size=32,
+        pytorch_weight_path="/zxk/my_openpi/pi05_base_torch", # weight_loader=weight_loaders.CheckpointWeightLoader("/zxk/my_openpi/pi05_base_torch"),
+        num_train_steps=1_000,
+        save_interval=50,
+    ),
     TrainConfig(
         name="pi0_libero",
         model=pi0_config.Pi0Config(),
