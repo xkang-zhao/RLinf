@@ -292,6 +292,21 @@ def prepare_actions_for_mujoco(raw_chunk_actions, model_type):
     return chunk_actions
 
 
+def prepare_actions_for_spaceur10e(
+    raw_chunk_actions: np.ndarray,
+    action_dim: int,
+) -> np.ndarray:
+    """Validate and clip normalized SpaceUR10e Cartesian actions."""
+    actions = np.asarray(raw_chunk_actions, dtype=np.float32)
+    if action_dim != 7 or actions.shape[-1] != 7:
+        raise ValueError(
+            "SpaceUR10e requires seven actions ordered as "
+            "[dx, dy, dz, droll, dpitch, dyaw, gripper], "
+            f"got action_dim={action_dim} and shape={actions.shape}."
+        )
+    return np.clip(actions, -1.0, 1.0)
+
+
 def prepare_actions_for_d4rl(
     raw_chunk_actions,
     action_dim: int,
@@ -404,6 +419,11 @@ def prepare_actions(
         chunk_actions = prepare_actions_for_mujoco(
             raw_chunk_actions=raw_chunk_actions,
             model_type=model_type,
+        )
+    elif env_type == SupportedEnvType.SPACEUR10E:
+        chunk_actions = prepare_actions_for_spaceur10e(
+            raw_chunk_actions=raw_chunk_actions,
+            action_dim=action_dim,
         )
     elif env_type == SupportedEnvType.D4RL:
         chunk_actions = prepare_actions_for_d4rl(

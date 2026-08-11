@@ -197,6 +197,7 @@ If you are starting from "I want to train on benchmark *X*", this is the right e
    RoboTwin <embodied/robotwin>
    RoboVerse <embodied/roboverse>
    Franka-Sim <embodied/frankasim>
+   SpaceUR10e <embodied/spaceur10e>
    EmbodiChain <embodied/embodichain>
    PolaRiS <embodied/polaris>
    GSEnv <embodied/gsenv>

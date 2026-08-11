@@ -86,7 +86,7 @@ NO_INSTALL_RLINF_CMD="--no-install-project"
 SUPPORTED_TARGETS=("embodied" "agentic" "docs")
 SUPPORTED_ENGINES=("sglang" "vllm")
 SUPPORTED_MODELS=("openvla" "openvla-oft" "openpi" "gr00t" "gr00t_n1d6" "gr00t_n1d7" "dexbotic" "starvla" "lingbotvla" "dreamzero" "qwen3_vl" "abot_m0" "molmoact2" "evo1")
-SUPPORTED_ENVS=("behavior" "maniskill_libero" "libero" "metaworld" "calvin" "isaaclab" "robocasa" "robocasa365" "franka" "franka-dexhand" "franka-franky" "frankasim" "robotwin" "habitat" "opensora" "wan" "genesis" "xsquare_turtle2" "liberopro" "liberoplus" "roboverse" "embodichain" "d4rl" "dosw1" "gim_arm" "dummy" "polaris")
+SUPPORTED_ENVS=("behavior" "maniskill_libero" "libero" "metaworld" "calvin" "isaaclab" "robocasa" "robocasa365" "franka" "franka-dexhand" "franka-franky" "frankasim" "robotwin" "habitat" "opensora" "wan" "genesis" "xsquare_turtle2" "liberopro" "liberoplus" "roboverse" "embodichain" "d4rl" "dosw1" "gim_arm" "dummy" "polaris" "spaceur10e")
 
 #=======================Utility Functions=======================
 
@@ -2030,6 +2030,9 @@ install_env_only() {
         polaris)
             install_polaris_env
             ;;
+        spaceur10e)
+            install_spaceur10e_env
+            ;;
         libero|maniskill_libero)
             install_common_embodied_deps
             install_${ENV_NAME}_env
@@ -2045,6 +2048,23 @@ install_env_only() {
 
 install_dummy_env() {
     uv sync --extra embodied --active $NO_INSTALL_RLINF_CMD
+}
+
+install_spaceur10e_env() {
+    install_common_embodied_deps
+
+    local spaceur10e_root="${SPACEUR10E_REPO_ROOT:-}"
+    if [ -z "$spaceur10e_root" ] || [ ! -d "$spaceur10e_root/src/envs" ] || [ ! -d "$spaceur10e_root/mjcf" ]; then
+        echo "SPACEUR10E_REPO_ROOT must point to a SpaceUR10e checkout containing src/envs and mjcf." >&2
+        exit 1
+    fi
+
+    # The SpaceUR10e package intentionally keeps simulator dependencies out of
+    # its project metadata, so install the runtime explicitly before editable
+    # installation. On macOS, conda-forge Pinocchio remains the recommended
+    # fallback if the PyPI 'pin' wheel has an incompatible C++ ABI.
+    uv pip install gymnasium mujoco opencv-python pin
+    uv pip install -e "$spaceur10e_root"
 }
 
 # LIBERO and its forks cache absolute paths in ~/.libero, ~/.liberopro and

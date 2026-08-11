@@ -1,0 +1,40 @@
+env_type: spaceur10e
+gym_id: SpaceUR10e-Cube-v0
+
+# Absolute path is recommended for Ray workers. The adapter also accepts the
+# SPACEUR10E_REPO_ROOT environment variable.
+repo_root: ${oc.env:SPACEUR10E_REPO_ROOT,${oc.env:PWD}/..}
+obs_mode: state
+obs_format: tensor
+task_prompt: "Grab the red cube in space."
+
+# The 21-D state intentionally excludes target_pose, so this state-only
+# baseline fixes the cube position. Re-enable randomization only when target
+# information or visual observations are available to the policy.
+target_init_range:
+  x: [1.60, 1.60]
+  y: [0.00, 0.00]
+  z: [2.65, 2.65]
+
+seed: 0
+total_num_envs: null
+group_size: 1
+
+auto_reset: true
+ignore_terminations: false
+max_steps_per_rollout_epoch: 400
+max_episode_steps: 400
+
+# The underlying environment already returns per-step dense reward.
+use_rel_reward: false
+reward_coef: 1.0
+is_eval: false
+
+# RLinf policies emit normalized [-1, 1] actions. The adapter scales them to
+# tool-frame translation (m), rotation (rad), and gripper command increments.
+action_scale: [0.01, 0.01, 0.01, 0.05, 0.05, 0.05, 1.0]
+
+video_cfg:
+  save_video: false
+  info_on_video: true
+  video_base_dir: ${runner.logger.log_path}/video/train
