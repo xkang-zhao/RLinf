@@ -73,6 +73,9 @@ from rlinf.models.embodiment.openpi.dataconfig.robocasa_dataconfig import (
 from rlinf.models.embodiment.openpi.dataconfig.robotwin_aloha_dataconfig import (
     LeRobotAlohaDataConfig,
 )
+from rlinf.models.embodiment.openpi.dataconfig.spaceur10e_dataconfig import (
+    LeRobotSpaceUR10eDataConfig,
+)
 
 _CONFIGS = [
     TrainConfig(
@@ -525,6 +528,22 @@ _CONFIGS = [
             action_train_with_rotation_6d=False,  # User can add extra config in custom dataset
         ),
         pytorch_weight_path="checkpoints/torch/pi0_base",
+    ),
+    TrainConfig(
+        name="pi0_spaceur10e",
+        model=pi0_config.Pi0Config(action_horizon=10),
+        data=LeRobotSpaceUR10eDataConfig(
+            repo_id="spaceur10e/multitask",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(assets_dir="checkpoints/torch/pi0_base/assets"),
+        ),
+        pytorch_weight_path="checkpoints/torch/pi0_base",
+        seed=0,
+        batch_size=16,
+        num_workers=4,
+        num_train_steps=10_000,
+        log_interval=10,
+        save_interval=1_000,
     ),
     TrainConfig(
         name="pi05_isaaclab_stack_cube",

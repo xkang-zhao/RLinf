@@ -1,0 +1,32 @@
+env_type: spaceur10e
+
+# The eight task definitions from my_simulation's auto-grasp registry are
+# assigned round-robin across the local vector environments.
+task_names: all
+repo_root: null
+obs_mode: rgb
+obs_format: tensor
+
+# Kept in HWC uint8 format for RLinf's OpenPI/OpenVLA-compatible processors.
+main_camera: third_left_camera
+wrist_camera: left_wrist_camera
+extra_camera: third_right_camera
+
+seed: 0
+total_num_envs: null
+group_size: 1
+auto_reset: true
+ignore_terminations: false
+max_steps_per_rollout_epoch: 400
+max_episode_steps: 400
+use_rel_reward: false
+reward_coef: 1.0
+is_eval: false
+# The automatic collector writes native per-step deltas. Pi0 unnormalizes back
+# to those values, so do not multiply them again during SFT-policy evaluation.
+action_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+video_cfg:
+  save_video: false
+  info_on_video: true
+  video_base_dir: ${runner.logger.log_path}/video/train

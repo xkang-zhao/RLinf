@@ -1,0 +1,89 @@
+defaults:
+  - env/spaceur10e_all_rgb@env.eval
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  # ``all`` uses one rollout and one environment worker per visible GPU.  On a
+  # single-GPU host, that worker owns all eight simulator instances.
+  component_placement:
+    env,rollout: all
+
+runner:
+  task_type: embodied_eval
+  logger:
+    log_path: ../results
+    project_name: rlinf
+    experiment_name: spaceur10e_pi0_sft_3000_eval
+    logger_backends: ["tensorboard"]
+
+  only_eval: true
+  val_check_interval: -1
+  save_interval: -1
+  resume_dir: null
+  ckpt_path: null
+
+env:
+  group_name: EnvGroup
+  enable_offload: false
+  eval:
+    # One reproducible, randomly initialized episode for every task in the
+    # automatic-grasp registry. Repeated rollout epochs advance reset seeds.
+    task_names: all
+    repo_root: /workspace/my_simulation
+    seed: 0
+    rollout_epoch: 1
+    total_num_envs: 8
+    group_size: 1
+    auto_reset: false
+    ignore_terminations: false
+    max_episode_steps: 400
+    max_steps_per_rollout_epoch: 400
+    is_eval: true
+    video_cfg:
+      save_video: false
+      info_on_video: true
+      video_base_dir: ${runner.logger.log_path}/video/eval
+
+rollout:
+  group_name: RolloutGroup
+  rollout_backend: huggingface
+  enable_offload: false
+  pipeline_stage_num: 1
+  collect_transitions: false
+  collect_prev_infos: false
+  model:
+    # Produced by the sft_to_openpi_rlinf conversion below; override this path
+    # when evaluating a different SFT checkpoint.
+    model_path: /workspace/RLinf/logs/spaceur10e_sft_3000/pi0_full_sft_3000/deploy/openpi_rlinf_bf16
+    model_type: openpi_rlinf
+    precision: bf16
+    is_lora: false
+    pi05: false
+    num_action_chunks: 10
+    action_dim: 7
+    use_proprio: true
+    num_steps: 5
+    add_value_head: false
+    openpi_data:
+      norm_stats_path: ${..model_path}/spaceur10e/multitask/norm_stats.json
+    openpi:
+      task: eval
+      config_name: pi0_spaceur10e
+      num_images_in_input: 3
+      action_chunk: ${..num_action_chunks}
+      action_env_dim: ${..action_dim}
+      model_action_dim: 32
+      paligemma_variant: gemma_2b
+      action_expert_variant: gemma_300m
+      max_token_len: 48
+      discrete_state_input: false
+      state_indices: [0, 1, 2, 3, 4, 5, 13, 14, 15, 16, 17, 18, 19]

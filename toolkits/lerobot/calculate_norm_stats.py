@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+
 import numpy as np
 import openpi.models.model as _model
 import openpi.shared.normalize as normalize
@@ -32,6 +34,50 @@ class RemoveStrings(transforms.DataTransformFn):
             for k, v in x.items()
             if not np.issubdtype(np.asarray(v).dtype, np.str_)
         }
+
+
+def _calculate_numeric_lerobot_stats(
+    dataset_root,
+    output_path,
+) -> None:
+    """Compute state/action statistics directly from LeRobot v2.1 Parquet.
+
+    OpenPI's transformed loader must decode video frames even when only numeric
+    normalization statistics are requested. SpaceUR10e stores state and action
+    in ordinary Parquet columns, so this path is exact for those features and
+    avoids decoding its three MP4 streams.
+    """
+    import pyarrow.parquet as pq
+
+    stats = {
+        "state": normalize.RunningStats(),
+        "actions": normalize.RunningStats(),
+    }
+    parquet_files = sorted((dataset_root / "data").glob("chunk-*/*.parquet"))
+    if not parquet_files:
+        raise FileNotFoundError(f"No LeRobot Parquet files found under {dataset_root}.")
+
+    for parquet_path in tqdm.tqdm(parquet_files, desc="Computing numeric stats"):
+        table = pq.read_table(parquet_path, columns=["observation.state", "action"])
+        state = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
+        actions = np.asarray(table["action"].to_pylist(), dtype=np.float32)
+        stats["state"].update(state)
+        stats["actions"].update(actions)
+
+    normalize.save(
+        output_path,
+        {key: value.get_statistics() for key, value in stats.items()},
+    )
+
+
+def _norm_stats_output_path(config, data_config: DataConfig) -> Path:
+    """Resolve a stats path without treating an absolute repo id as a child path."""
+    assets = config.data.assets
+    assets_dir = getattr(assets, "assets_dir", None)
+    asset_id = getattr(assets, "asset_id", None)
+    if assets_dir:
+        return Path(assets_dir) / (asset_id or Path(data_config.repo_id).name)
+    return Path(config.assets_dirs) / Path(data_config.repo_id).name
 
 
 def create_torch_dataloader(
@@ -106,7 +152,20 @@ def create_rlds_dataloader(
 def main(
     config_name: str,
     repo_id: str,
+    model_path: str | None = None,
+    numeric_only: bool = False,
 ):
+    """Calculate OpenPI normalization statistics for a local LeRobot dataset.
+
+    Args:
+        config_name: Registered OpenPI data configuration name.
+        repo_id: Local LeRobot dataset directory or a cached repo id.
+        model_path: Optional Pi0 checkpoint directory that should receive the
+            generated statistics. When omitted, the registered config assets
+            directory is used.
+        numeric_only: Read only LeRobot v2.1 numeric Parquet features instead
+            of decoding video frames through the transformed OpenPI loader.
+    """
     dataset_root = resolve_lerobot_dataset_root(repo_id)
     if not (dataset_root / "meta" / "info.json").is_file():
         raise FileNotFoundError(
@@ -118,8 +177,16 @@ def main(
     config = get_openpi_config(
         config_name,
         repo_id=repo_id,
+        model_path=model_path,
     )
     data_config = config.data.create(config.assets_dirs, config.model)
+
+    output_path = _norm_stats_output_path(config, data_config)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if numeric_only:
+        _calculate_numeric_lerobot_stats(dataset_root, output_path)
+        print(f"Writing stats to: {output_path}")
+        return
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
@@ -143,7 +210,6 @@ def main(
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

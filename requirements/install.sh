@@ -2055,7 +2055,7 @@ install_spaceur10e_env() {
 
     local spaceur10e_root="${SPACEUR10E_REPO_ROOT:-}"
     if [ -z "$spaceur10e_root" ] || [ ! -d "$spaceur10e_root/src/envs" ] || [ ! -d "$spaceur10e_root/mjcf" ]; then
-        echo "SPACEUR10E_REPO_ROOT must point to a SpaceUR10e checkout containing src/envs and mjcf." >&2
+        echo "SPACEUR10E_REPO_ROOT must point to a my_simulation fix0613 checkout containing src/envs and mjcf/." >&2
         exit 1
     fi
 

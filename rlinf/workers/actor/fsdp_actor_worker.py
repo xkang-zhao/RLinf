@@ -1086,6 +1086,9 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         self.entropy_op_type = self.cfg.algorithm.get("entropy_op_type", "torch")
 
         self.enable_sft_co_train = cfg.actor.get("enable_sft_co_train", False)
+        self.sft_co_train_every_micro_batch = cfg.actor.get(
+            "sft_co_train_every_micro_batch", True
+        )
         self.version = 0
         if self.enable_sft_co_train:
             self._build_sft_data_loader()
@@ -1417,7 +1420,10 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         return self._opd_teacher_model
 
     def _build_sft_data_loader(self):
-        if SupportedModel(self.cfg.actor.model.model_type) in [SupportedModel.OPENPI]:
+        if SupportedModel(self.cfg.actor.model.model_type) in [
+            SupportedModel.OPENPI,
+            SupportedModel.OPENPI_RLINF,
+        ]:
             repo_id = resolve_lerobot_repo_id(self.cfg.actor.get("sft_data_path"))
             if repo_id is None:
                 raise ValueError(
@@ -1434,9 +1440,13 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     "config_name is required when enable_sft_co_train=True"
                 )
             training_config_name = self.cfg.actor.config_name
+            sft_batch_size = self.cfg.actor.get("sft_batch_size", None)
             data_loader_config = get_openpi_config(
                 training_config_name,
                 model_path=self.cfg.actor.model.model_path,
+                batch_size=(
+                    int(sft_batch_size) if sft_batch_size is not None else None
+                ),
                 repo_id=repo_id,
                 data_kwargs=getattr(self.cfg.actor.model, "openpi_data", None),
             )
@@ -1452,7 +1462,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             )
 
     def _train_sft_epoch(
-        self, metrics_data: dict[str, torch.Tensor], loss: torch.Tensor
+        self,
+        metrics_data: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        *,
+        accumulation_scale: int = 1,
     ) -> torch.Tensor:
         """
         Train one epoch of SFT.
@@ -1473,7 +1487,10 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             forward_type=ForwardType.SFT,
         )
         metrics_data["sft_loss"] = sft_loss.detach().item()
-        total_loss = loss + self.sft_loss_weight * sft_loss
+        # ``loss`` is divided by ``gradient_accumulation`` after this method.
+        # When SFT runs once per global batch, compensate so its configured
+        # weight is not diluted by the PPO gradient accumulation factor.
+        total_loss = loss + self.sft_loss_weight * accumulation_scale * sft_loss
         loss = total_loss
 
         metrics_data["loss_ratio"] = (
@@ -1481,7 +1498,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             if np.abs(metrics_data["ppo_loss"]) > 0
             else float("inf")
         )
-        if metrics_data["loss_ratio"] > 1e5:
+        if metrics_data["ppo_loss"] != 0 and metrics_data["loss_ratio"] > 1e5:
             self.logger.warning(
                 "SFT/PPO loss imbalance detected: "
                 f"ratio={metrics_data['loss_ratio']:.3e}, "
@@ -1700,8 +1717,20 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             loss -= self.cfg.algorithm.entropy_bonus * entropy_loss
         metrics_data["actor/entropy_loss"] = entropy_loss.detach().item()
 
-        if self.enable_sft_co_train:
-            loss = self._train_sft_epoch(metrics_data, loss)
+        run_sft = (
+            self.enable_sft_co_train
+            and not loss_kwargs["critic_warmup"]
+            and (self.sft_co_train_every_micro_batch or is_last)
+        )
+        if run_sft:
+            accumulation_scale = (
+                1 if self.sft_co_train_every_micro_batch else self.gradient_accumulation
+            )
+            loss = self._train_sft_epoch(
+                metrics_data,
+                loss,
+                accumulation_scale=accumulation_scale,
+            )
 
         loss /= self.gradient_accumulation
         with backward_ctx:

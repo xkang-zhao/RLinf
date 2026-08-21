@@ -1,0 +1,169 @@
+# Multi-task PPO for the eight SpaceUR10e grasping tasks.
+defaults:
+  - env/spaceur10e_all_rgb@env.train
+  - env/spaceur10e_all_rgb@env.eval
+  - model/pi0_spaceur10e_rlinf_ppo@actor.model
+  - hybrid_engines/fsdp@actor.fsdp_config
+  - weight_syncer/patch_syncer@weight_syncer
+  - override hydra/job_logging: stdout
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    # A single A800 is shared in time: rollout and environment workers offload
+    # while the FSDP actor performs its PPO update.
+    actor,env,rollout: all
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "spaceur10e_ppo_pi0_sparse_stable_100"
+    logger_backends: ["tensorboard"]
+
+  only_eval: false
+  max_epochs: 1000
+  max_steps: 100
+  # Evaluate two random resets per task every ten PPO iterations.
+  val_check_interval: 10
+  save_interval: 10
+  seq_length: 4096
+  max_prompt_length: 48
+  resume_dir: null
+  ckpt_path: null
+
+algorithm:
+  normalize_advantages: true
+  kl_penalty: kl
+  group_size: 1
+  reward_type: chunk_level
+  logprob_type: chunk_level
+  entropy_type: token_level
+  adv_type: gae
+  loss_type: actor_critic
+  loss_agg_func: "token-mean"
+  # Embodied OpenPI does not currently compute reference-policy log-probabilities.
+  # Keep this at zero and use the real SFT co-training constraint below.
+  kl_beta: 0.0
+  entropy_bonus: 0.0
+  clip_ratio_high: 0.1
+  clip_ratio_low: 0.1
+  clip_ratio_c: 3.0
+  value_clip: 0.2
+  huber_delta: 10.0
+  gamma: 0.99
+  # A longer GAE horizon propagates the terminal sparse reward farther back.
+  gae_lambda: 0.98
+  # The environment emits one terminal reward for a confirmed grasp.
+  reward_coef: 1.0
+
+env:
+  group_name: "EnvGroup"
+  train:
+    # Eight vector environments are assigned the eight task names round-robin.
+    total_num_envs: 8
+    group_size: 1
+    # Four random resets per task give the sparse reward a useful on-policy
+    # batch while retaining only eight concurrent simulator processes.
+    rollout_epoch: 4
+    max_episode_steps: 400
+    max_steps_per_rollout_epoch: 400
+    auto_reset: false
+    ignore_terminations: false
+    is_eval: false
+    reward_coef: ${algorithm.reward_coef}
+    num_env_subprocess: 1
+    # SpaceUR10eEnv does not expose RLinf's optional CPU-offload hook.
+    enable_offload: false
+    enable_init_offload: false
+    video_cfg:
+      save_video: false
+      video_base_dir: ${runner.logger.log_path}/video/train
+      fps: 15
+  eval:
+    total_num_envs: 8
+    group_size: 1
+    rollout_epoch: 2
+    max_episode_steps: 400
+    max_steps_per_rollout_epoch: 400
+    auto_reset: false
+    ignore_terminations: false
+    is_eval: true
+    num_env_subprocess: 1
+    video_cfg:
+      save_video: false
+      video_base_dir: ${runner.logger.log_path}/video/eval
+      fps: 15
+
+rollout:
+  group_name: "RolloutGroup"
+  backend: "huggingface"
+  enable_offload: true
+  pipeline_stage_num: 1
+  model:
+    model_path: "/workspace/RLinf/logs/spaceur10e_sft_3000/pi0_full_sft_3000/deploy/openpi_rlinf_bf16"
+    precision: ${actor.model.precision}
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+  # A 400-step, 8-env, four-epoch rollout yields 1280 Pi0 chunks: five PPO
+  # optimizer updates of 256 samples, accumulated from bf16 micro-batches.
+  micro_batch_size: 4
+  global_batch_size: 256
+  seed: 1234
+  enable_offload: true
+
+  # Anchor online PPO updates to the original 800-demo multi-task dataset.
+  # The explicit small SFT batch avoids loading the data config's SFT batch of
+  # 16 alongside each PPO micro-batch on a single 80 GiB GPU.
+  config_name: ${actor.model.openpi.config_name}
+  enable_sft_co_train: true
+  sft_data_path: "/workspace/my_simulation/dataset/spaceur10e_multitask_lerobot_v21"
+  sft_batch_size: 2
+  sft_loss_weight: 0.1
+  # Run one SFT batch per global PPO batch (five per iteration), rather than
+  # one expensive three-camera SFT pass for every PPO micro-batch.
+  sft_co_train_every_micro_batch: false
+
+  model:
+    model_path: ${rollout.model.model_path}
+
+  optim:
+    # The former 5e-6 actor LR caused rapid policy drift after SFT.
+    lr: 5.0e-7
+    value_lr: 5.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_eps: 1.0e-8
+    clip_grad: 1.0
+    weight_decay: 0.01
+    # With five optimizer updates per PPO iteration this warms the value head
+    # for four iterations before enabling the PPO policy loss.
+    critic_warmup_steps: 20
+
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "shard_grad_op"
+    # The frozen VLM and trainable action expert coexist under FSDP.
+    use_orig_params: true
+    gradient_checkpointing: false
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: false
+
+critic:
+  use_critic_model: false

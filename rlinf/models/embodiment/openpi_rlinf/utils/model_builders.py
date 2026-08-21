@@ -184,6 +184,10 @@ def _build_rl_model(
         action_env_dim=action_env_dim,
         rl_cfg=rl_cfg,
         paligemma_width=paligemma_width,
+        # The generic eval wrapper already applies this subset before its
+        # transforms pipeline.  Pass it through for RL too: SpaceUR10e emits a
+        # 27-D online state while its Pi0 checkpoint was trained on 13 values.
+        state_indices=OmegaConf.select(model_cfg, "state_indices", default=None),
     )
     rl_model.setup_wrappers(input_transforms, output_transforms)
     if bool(OmegaConf.select(model_cfg, "train_expert_only", default=False)):

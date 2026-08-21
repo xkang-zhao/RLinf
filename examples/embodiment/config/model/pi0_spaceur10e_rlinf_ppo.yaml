@@ -1,0 +1,49 @@
+# PyTorch Pi0 configuration for multi-task SpaceUR10e PPO.
+# This starts from the full SFT deployment checkpoint and adds an RL-only value
+# head.  The value head is intentionally not part of the deployment checkpoint.
+model_type: "openpi_rlinf"
+# The converted SFT deployment uses bf16.  Keeping PPO actor and rollout in
+# the same dtype avoids Pi0's fused VLM projection dtype mismatch and is the
+# native mixed-precision path on the A800.
+precision: bf16
+pi05: false
+is_lora: false
+
+num_action_chunks: 10
+action_dim: 7
+use_proprio: true
+num_steps: 5
+add_value_head: true
+
+openpi:
+  task: rl
+  config_name: "pi0_spaceur10e"
+  num_images_in_input: 3
+  action_chunk: ${..num_action_chunks}
+  action_env_dim: ${..action_dim}
+  model_action_dim: 32
+  paligemma_variant: "gemma_2b"
+  action_expert_variant: "gemma_300m"
+  max_token_len: 48
+  discrete_state_input: false
+  # The adapter supplies 27-D robot state; Pi0 consumes joint positions plus
+  # end-effector pose, matching the SFT demonstrations.
+  state_indices: [0, 1, 2, 3, 4, 5, 13, 14, 15, 16, 17, 18, 19]
+
+  # RL uses the VLM prefix as critic input.  Gradients are intentionally
+  # detached from it; PPO updates the action expert, projections and value head.
+  value_after_vlm: true
+  value_vlm_mode: "mean_token"
+  detach_critic_input: true
+  joint_logprob: false
+  ignore_last: true
+  # Keep enough SDE variance for numerically stable bf16 log-probability
+  # recomputation. A measured 0.15 run amplified the first-step approximate KL
+  # from 1.20 (at 0.4) to 12.88, so policy stability is enforced by the lower
+  # LR, tighter clipping, critic warmup and SFT co-training instead.
+  noise_level: 0.4
+  noise_method: "flow_sde"
+  train_expert_only: true
+
+openpi_data:
+  norm_stats_path: ${..model_path}/spaceur10e/multitask/norm_stats.json

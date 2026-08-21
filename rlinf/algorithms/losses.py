@@ -122,7 +122,11 @@ def compute_decoupled_ppo_actor_loss(
 
     pg_loss = loss_agg_func(pg_loss * behav_weight, behav_mask, loss_mask_ratio)
     if critic_warmup:
-        pg_loss = torch.tensor(0.0, device=pg_loss.device)
+        # Preserve the actor autograd/FSDP graph while producing exactly zero
+        # actor gradients. Replacing the loss with a detached scalar leaves
+        # nested FSDP action-expert modules unused in backward and can make a
+        # subsequent state_dict contain only the value head.
+        pg_loss = pg_loss * 0.0
 
     with torch.no_grad():
         clip_fraction = (pg_loss1 < pg_loss2).logical_and(
@@ -280,7 +284,10 @@ def compute_ppo_actor_loss(
     dual_cliped_ratio = torch.where(dual_clip_mask, ratio, 0)
 
     if critic_warmup:
-        policy_loss = torch.tensor(0.0, device=policy_loss.device)
+        # Keep every actor FSDP module in backward with zero gradients. A new
+        # detached zero tensor makes nested FSDP lose the action-expert state
+        # after critic-only warmup on a single-GPU NO_SHARD setup.
+        policy_loss = policy_loss * 0.0
 
     # Compile metrics for logging
     loss_mask_for_metrics = loss_mask

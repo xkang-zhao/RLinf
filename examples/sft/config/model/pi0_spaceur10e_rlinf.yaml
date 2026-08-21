@@ -1,0 +1,30 @@
+# PyTorch Pi0 configuration for the SpaceUR10e LeRobot demonstrations.
+model_type: "openpi_rlinf"
+precision: fp32
+pi05: false
+
+# The currently vendored Pi0 base loader performs strict checkpoint loading.
+# Use full-parameter SFT for an untouched official base checkpoint; the paired
+# A800 configuration uses a small micro-batch and gradient checkpointing.
+is_lora: false
+
+num_action_chunks: 10
+action_dim: 7
+use_proprio: true
+num_steps: 5
+add_value_head: false
+
+openpi:
+  task: sft
+  config_name: "pi0_spaceur10e"
+  num_images_in_input: 3
+  action_chunk: ${..num_action_chunks}
+  action_env_dim: ${..action_dim}
+  model_action_dim: 32
+  paligemma_variant: "gemma_2b"
+  action_expert_variant: "gemma_300m"
+  max_token_len: 48
+  discrete_state_input: false
+  # The online adapter publishes a 27-D state. The demonstrations and Pi0
+  # checkpoint use joint positions (6) plus end-effector pose (7).
+  state_indices: [0, 1, 2, 3, 4, 5, 13, 14, 15, 16, 17, 18, 19]

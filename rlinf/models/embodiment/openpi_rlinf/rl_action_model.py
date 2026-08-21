@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import random
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import torch
 
@@ -28,6 +28,9 @@ from rlinf.models.embodiment.openpi_rlinf.eval_action_model import (
 from rlinf.models.embodiment.openpi_rlinf.pi0_model import model as pi0_model_module
 from rlinf.models.embodiment.openpi_rlinf.pi0_model.model import Observation
 from rlinf.models.embodiment.openpi_rlinf.pi0_model.pi0 import Pi0
+from rlinf.models.embodiment.openpi_rlinf.sft_action_model import (
+    OpenPiPytorchSFTMixin,
+)
 from rlinf.models.embodiment.openpi_rlinf.utils import rl_sampler
 
 
@@ -47,7 +50,7 @@ class OpenPiPytorchRLConfig:
     config_name: str = ""
 
 
-class OpenPiPytorchRLActionModel(OpenPiPytorchEvalActionModel):
+class OpenPiPytorchRLActionModel(OpenPiPytorchSFTMixin, OpenPiPytorchEvalActionModel):
     """Eval + PPO variant of :class:`OpenPiPytorchEvalActionModel`."""
 
     def __init__(
@@ -59,6 +62,7 @@ class OpenPiPytorchRLActionModel(OpenPiPytorchEvalActionModel):
         action_env_dim: int,
         rl_cfg: OpenPiPytorchRLConfig,
         paligemma_width: int,
+        state_indices: Sequence[int] | None = None,
     ):
         super().__init__(
             pi0_model,
@@ -66,6 +70,7 @@ class OpenPiPytorchRLActionModel(OpenPiPytorchEvalActionModel):
             action_env_dim=action_env_dim,
             action_chunk=action_chunk,
             config_name=rl_cfg.config_name,
+            state_indices=state_indices,
         )
         # RL-only shape knobs for the SDE chain. ``action_chunk`` is already
         # stored on the base (used by :meth:`output_transform`); these two are
@@ -271,14 +276,14 @@ class OpenPiPytorchRLActionModel(OpenPiPytorchEvalActionModel):
     # --------------------------------------------------------------- training
 
     def forward(self, forward_type: ForwardType = ForwardType.DEFAULT, **kwargs):
-        """Dispatch — RL variant only supports :attr:`ForwardType.DEFAULT`."""
-        if forward_type != ForwardType.DEFAULT:
-            raise NotImplementedError(
-                f"{type(self).__name__} only supports ForwardType.DEFAULT; "
-                f"got forward_type={forward_type!r}. "
-                "Use the SFT subclass (actor.model.openpi.task='sft') for SFT."
-            )
-        return self.default_forward(**kwargs)
+        """Dispatch PPO recomputation or the co-training SFT loss."""
+        if forward_type == ForwardType.DEFAULT:
+            return self.default_forward(**kwargs)
+        if forward_type == ForwardType.SFT:
+            return self.sft_forward(**kwargs)
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support forward_type={forward_type!r}."
+        )
 
     def default_forward(self, forward_inputs: dict[str, torch.Tensor], **kwargs):
         """PPO-time recompute of logprobs and values from the stored chain."""

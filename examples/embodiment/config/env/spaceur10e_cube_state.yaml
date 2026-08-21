@@ -1,20 +1,13 @@
 env_type: spaceur10e
-gym_id: SpaceUR10e-Cube-v0
+# Names come from my_simulation's eight automatic-grasp tasks. Set task_names:
+# all to cycle all eight task definitions across vectorized environments.
+task_name: cube
 
-# Absolute path is recommended for Ray workers. The adapter also accepts the
-# SPACEUR10E_REPO_ROOT environment variable.
-repo_root: ${oc.env:SPACEUR10E_REPO_ROOT,${oc.env:PWD}/..}
+# The adapter also reads SPACEUR10E_REPO_ROOT and resolves all MJCF paths from
+# this checkout, so launches do not depend on the current working directory.
+repo_root: null
 obs_mode: state
 obs_format: tensor
-task_prompt: "Grab the red cube in space."
-
-# The 21-D state intentionally excludes target_pose, so this state-only
-# baseline fixes the cube position. Re-enable randomization only when target
-# information or visual observations are available to the policy.
-target_init_range:
-  x: [1.60, 1.60]
-  y: [0.00, 0.00]
-  z: [2.65, 2.65]
 
 seed: 0
 total_num_envs: null
@@ -25,7 +18,7 @@ ignore_terminations: false
 max_steps_per_rollout_epoch: 400
 max_episode_steps: 400
 
-# The underlying environment already returns per-step dense reward.
+# A confirmed grasp receives 1.0; every intermediate/failure step receives 0.0.
 use_rel_reward: false
 reward_coef: 1.0
 is_eval: false

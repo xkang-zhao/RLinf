@@ -108,6 +108,8 @@ def copy_norm_stats(src: str | pathlib.Path, dst: str | pathlib.Path) -> None:
     dst = pathlib.Path(dst)
     if not src.is_file():
         raise FileNotFoundError(f"input norm stats not found: {src}")
+    if src.resolve() == dst.resolve():
+        return
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Convert an RLinf SFT checkpoint to the OpenPI_RLinf layout.
+"""Convert an RLinf trained Pi0 checkpoint to the OpenPI_RLinf layout.
 
 The ``--config-name`` argument is the single source of truth for the target
 Pi0/Pi0.5 architecture. It is resolved through
@@ -69,6 +69,27 @@ _WEIGHTS_CANDIDATES = (
     "model_state_dict/full_weights.pt",
     "full_weights.pt",
 )
+
+# PPO wraps the deployable Pi0 policy in ``OpenPiPytorchRLActionModel`` and
+# adds a critic-only ``value_head``.  Evaluation loads the bare Pi0 policy
+# strictly, so those keys must not be written to model.safetensors.  SFT
+# checkpoints have no such keys, making this a no-op for the original mode.
+_PPO_ONLY_PREFIXES = ("value_head.",)
+
+
+def _drop_ppo_only_keys(
+    state_dict: Mapping[str, torch.Tensor],
+) -> tuple[dict[str, torch.Tensor], list[str]]:
+    """Remove critic-only PPO tensors from a policy deployment artifact."""
+    dropped = [
+        key
+        for key in state_dict
+        if any(key.startswith(prefix) for prefix in _PPO_ONLY_PREFIXES)
+    ]
+    return (
+        {key: tensor for key, tensor in state_dict.items() if key not in dropped},
+        dropped,
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -234,6 +255,7 @@ def convert(
         state_dict,
         cast_dtype=_DTYPES[dtype][0],
     )
+    bare_state, dropped_ppo_keys = _drop_ppo_only_keys(bare_state)
     _validate_state_dict(bare_state, spec)
     if reference_model is not None:
         _validate_against_reference(bare_state, reference_model, spec)
@@ -247,7 +269,8 @@ def convert(
     print(
         f"Converted {weights_path} -> {output_model} "
         f"(config_name={spec.config_name}, pi05={spec.pi05}, "
-        f"{len(bare_state)} {dtype} tensors); "
+        f"{len(bare_state)} {dtype} tensors, "
+        f"dropped_ppo_critic_tensors={len(dropped_ppo_keys)}); "
         f"norm stats -> {output_norm_stats}"
     )
     return output_model

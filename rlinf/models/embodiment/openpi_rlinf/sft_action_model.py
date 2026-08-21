@@ -26,31 +26,8 @@ from rlinf.models.embodiment.openpi_rlinf.pi0_model.model import Observation
 from rlinf.models.embodiment.openpi_rlinf.pi0_model.pi0 import Pi0
 
 
-class OpenPiPytorchSFTActionModel(OpenPiPytorchActionModel):
-    """SFT variant of :class:`OpenPiPytorchActionModel` (flow-matching loss)."""
-
-    def __init__(
-        self,
-        pi0_model: Pi0,
-        *,
-        num_steps: int,
-        action_env_dim: int,
-    ):
-        super().__init__(
-            pi0_model,
-            num_steps=num_steps,
-            action_env_dim=action_env_dim,
-        )
-
-    def forward(self, forward_type: ForwardType = ForwardType.SFT, **kwargs):
-        """Dispatch — SFT variant only supports :attr:`ForwardType.SFT`."""
-        if forward_type != ForwardType.SFT:
-            raise NotImplementedError(
-                f"{type(self).__name__} only supports ForwardType.SFT; "
-                f"got forward_type={forward_type!r}. "
-                "Use the RL subclass (actor.model.openpi.task='rl') for PPO."
-            )
-        return self.sft_forward(**kwargs)
+class OpenPiPytorchSFTMixin:
+    """Reusable flow-matching SFT loss for SFT and PPO+SFT models."""
 
     def sft_forward(self, data: Any) -> torch.Tensor:
         """Compute the flow-matching SFT loss for one batch.
@@ -129,3 +106,30 @@ class OpenPiPytorchSFTActionModel(OpenPiPytorchActionModel):
             f"openpi transform pipeline before collation); got last dim "
             f"{actions.shape[-1]}."
         )
+
+
+class OpenPiPytorchSFTActionModel(OpenPiPytorchSFTMixin, OpenPiPytorchActionModel):
+    """SFT variant of :class:`OpenPiPytorchActionModel` (flow-matching loss)."""
+
+    def __init__(
+        self,
+        pi0_model: Pi0,
+        *,
+        num_steps: int,
+        action_env_dim: int,
+    ):
+        super().__init__(
+            pi0_model,
+            num_steps=num_steps,
+            action_env_dim=action_env_dim,
+        )
+
+    def forward(self, forward_type: ForwardType = ForwardType.SFT, **kwargs):
+        """Dispatch — SFT variant only supports :attr:`ForwardType.SFT`."""
+        if forward_type != ForwardType.SFT:
+            raise NotImplementedError(
+                f"{type(self).__name__} only supports ForwardType.SFT; "
+                f"got forward_type={forward_type!r}. "
+                "Use the RL subclass (actor.model.openpi.task='rl') for PPO."
+            )
+        return self.sft_forward(**kwargs)

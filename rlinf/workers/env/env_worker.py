@@ -588,13 +588,20 @@ class EnvWorker(Worker):
             self.eval_prev_done[stage_id] = prev | current_dones
 
         if newly_done.any():
+            episode_metrics = None
+            metric_infos = infos
             if "final_info" in infos:
-                final_info = infos["final_info"]
-                for key in final_info["episode"]:
-                    env_info[key] = final_info["episode"][key][newly_done].cpu()
+                metric_infos = infos["final_info"]
+                episode_metrics = metric_infos["episode"]
             elif "episode" in infos:
-                for key in infos["episode"]:
-                    env_info[key] = infos["episode"][key][newly_done].cpu()
+                episode_metrics = infos["episode"]
+
+            if episode_metrics is not None:
+                for key in episode_metrics:
+                    env_info[key] = episode_metrics[key][newly_done].cpu()
+                self._record_spaceur10e_task_successes(
+                    env_info, metric_infos, episode_metrics, newly_done
+                )
 
         rlt_switch_flags = (
             infos["rlt_switch_flags"] if "rlt_switch_flags" in infos else None
@@ -607,6 +614,36 @@ class EnvWorker(Worker):
             rlt_switch_flags=rlt_switch_flags,
         )
         return env_output, env_info
+
+    def _record_spaceur10e_task_successes(
+        self,
+        env_info: dict[str, Any],
+        metric_infos: dict[str, Any],
+        episode_metrics: dict[str, Any],
+        newly_done: torch.Tensor,
+    ) -> None:
+        """Add task-scoped success samples for mixed SpaceUR10e evaluation."""
+        if self.cfg.env.eval.env_type != "spaceur10e":
+            return
+
+        task_names = metric_infos.get("task_name")
+        success_once = episode_metrics.get("success_once")
+        if not isinstance(task_names, (list, tuple)) or not isinstance(
+            success_once, torch.Tensor
+        ):
+            return
+        if len(task_names) != success_once.shape[0]:
+            return
+
+        task_successes: dict[str, list[torch.Tensor]] = defaultdict(list)
+        for env_index in newly_done.nonzero(as_tuple=False).flatten().tolist():
+            task_name = task_names[env_index]
+            if isinstance(task_name, str):
+                task_successes[task_name].append(
+                    success_once[env_index].reshape(1).cpu()
+                )
+        for task_name, successes in task_successes.items():
+            env_info[f"task/{task_name}/success_once"] = torch.cat(successes)
 
     def _build_chunk_final_obs(self, obs_list, infos_list):
         """Build per-env terminal observations for a whole chunk.

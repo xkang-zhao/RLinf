@@ -449,7 +449,7 @@ class FSDPModelManager:
         self.grad_scaler.update()
 
         if self.critic_warmup_steps > 0:
-            lr_list = [0.0 for _ in self.optimizer.param_groups]
+            lr_list = [group["lr"] for group in self.optimizer.param_groups]
             if self.optimizer_steps >= self.critic_warmup_steps:
                 self.optimizer = self.build_optimizer(model=self.model)
                 self.critic_warmup_steps = 0
@@ -527,8 +527,13 @@ class FSDPModelManager:
                     self.store_requires_grad_param_name.append(name)
                     if "value_head" in name or "model.value_head" in name:
                         params_critic.append(param)
-                        continue
-                    param.requires_grad = False
+                    else:
+                        params_actor.append(param)
+            # Keep all originally trainable parameters registered in the
+            # optimizer, but give the actor group zero LR. On single-GPU
+            # NO_SHARD FSDP, omitting the actor group can make the post-training
+            # state_dict contain only the value head and break rollout sync.
+            # Policy and SFT losses are also disabled during warmup.
 
         else:
             for name, param in model.named_parameters():
@@ -545,7 +550,7 @@ class FSDPModelManager:
             param_groups.append(
                 {
                     "params": params_actor,
-                    "lr": self._cfg.optim.lr,
+                    "lr": 0.0 if enable_critic_warmup else self._cfg.optim.lr,
                     "betas": betas,
                 }
             )

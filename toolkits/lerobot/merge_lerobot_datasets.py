@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -159,6 +161,29 @@ def _ensure_list(value: object) -> list:
     return value if isinstance(value, list) else [value]
 
 
+def _video_feature_keys(info: dict[str, Any]) -> list[str]:
+    """Return video features declared by a LeRobot v2.1 dataset."""
+    return sorted(
+        key
+        for key, feature in info.get("features", {}).items()
+        if feature.get("dtype") == "video"
+    )
+
+
+def _hardlink_or_copy(source: Path, target: Path) -> None:
+    """Materialize a dataset video without modifying the source dataset.
+
+    Dataset roots commonly reside on the same filesystem, where a hard link
+    avoids duplicating large videos. Falling back to a metadata-preserving copy
+    keeps the tool usable when source and destination are on different mounts.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
 def merge_lerobot_datasets(
     source_dirs: list[str | Path],
     output_dir: str | Path,
@@ -207,6 +232,7 @@ def merge_lerobot_datasets(
 
     # episode_index (within dataset) → stats record, keyed by (ds_path, ep_idx)
     source_episode_stats: dict[tuple[Path, int], dict] = {}
+    source_infos: dict[Path, dict[str, Any]] = {}
 
     for ds_path in datasets:
         info_path = ds_path / "meta" / "info.json"
@@ -218,8 +244,14 @@ def merge_lerobot_datasets(
 
         with open(info_path) as f:
             info = json.load(f)
+        source_infos[ds_path] = info
         if reference_info is None:
             reference_info = info
+        elif _video_feature_keys(info) != _video_feature_keys(reference_info):
+            raise ValueError(
+                "All merged LeRobot datasets must expose the same video "
+                f"features; {ds_path} differs from the first dataset."
+            )
 
         episodes = _read_jsonl(episodes_path)
         chunks_size: int = info.get("chunks_size", 1000)
@@ -265,6 +297,11 @@ def merge_lerobot_datasets(
         print("[merge] Dry-run mode — no files written.")
         return total_episodes
 
+    if output_path.exists() and any(output_path.iterdir()):
+        raise FileExistsError(
+            f"Output directory already exists and is not empty: {output_path}."
+        )
+
     # ------------------------------------------------------------------
     # 3. Prepare output directories
     # ------------------------------------------------------------------
@@ -278,6 +315,7 @@ def merge_lerobot_datasets(
     global_frame_index = 0
     merged_episode_metas: list[dict] = []
     merged_episode_stats: list[dict] = []
+    video_feature_keys = _video_feature_keys(reference_info or {})
 
     for new_ep_idx, (ds_path, ep_meta, parquet_path) in enumerate(all_episodes):
         table = pq.read_table(parquet_path)
@@ -292,7 +330,8 @@ def merge_lerobot_datasets(
         df["index"] = range(global_frame_index, global_frame_index + n_frames)
 
         task = ep_meta.get("tasks", ["unknown task"])[0]
-        df["task_index"] = global_tasks.get(task, 0)
+        task_index = global_tasks.get(task, 0)
+        df["task_index"] = task_index
 
         # Determine output chunk
         output_chunks_size = 1000
@@ -309,6 +348,33 @@ def merge_lerobot_datasets(
             new_schema = new_table.schema.with_metadata(table.schema.metadata)
             new_table = new_table.cast(new_schema)
         pq.write_table(new_table, out_parquet)
+
+        source_info = source_infos[ds_path]
+        source_chunks_size = int(source_info.get("chunks_size", 1000))
+        source_video_template = source_info.get("video_path")
+        output_video_template = (reference_info or {}).get("video_path")
+        if video_feature_keys and (
+            source_video_template is None or output_video_template is None
+        ):
+            raise ValueError(
+                f"Video features are declared but video_path is missing in {ds_path}."
+            )
+        for video_key in video_feature_keys:
+            source_video = ds_path / source_video_template.format(
+                episode_chunk=old_ep_idx // source_chunks_size,
+                video_key=video_key,
+                episode_index=old_ep_idx,
+            )
+            if not source_video.is_file():
+                raise FileNotFoundError(
+                    f"Missing video for episode {old_ep_idx}: {source_video}"
+                )
+            target_video = output_path / output_video_template.format(
+                episode_chunk=new_ep_idx // output_chunks_size,
+                video_key=video_key,
+                episode_index=new_ep_idx,
+            )
+            _hardlink_or_copy(source_video, target_video)
 
         merged_episode_metas.append(
             {
@@ -332,6 +398,15 @@ def merge_lerobot_datasets(
                 new_frame_start=global_frame_index,
                 old_frame_start=old_frame_start,
             )
+            if "task_index" in new_stats:
+                task_count = new_stats["task_index"].get("count", [n_frames])
+                new_stats["task_index"] = {
+                    "min": [task_index],
+                    "max": [task_index],
+                    "mean": [float(task_index)],
+                    "std": [0.0],
+                    "count": task_count,
+                }
             merged_episode_stats.append(
                 {"episode_index": new_ep_idx, "stats": new_stats}
             )
@@ -353,15 +428,15 @@ def merge_lerobot_datasets(
             "total_episodes": total_episodes,
             "total_frames": global_frame_index,
             "total_tasks": len(global_tasks),
-            "total_videos": 0,
+            "total_videos": total_episodes * len(video_feature_keys),
             "total_chunks": max(1, total_chunks),
             "chunks_size": output_chunks_size,
             "splits": {"train": f"0:{total_episodes}"},
             "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
         }
     )
-    # Remove video_path if no videos were written
-    info_out.pop("video_path", None)
+    if not video_feature_keys:
+        info_out.pop("video_path", None)
 
     with open(output_path / "meta" / "info.json", "w") as f:
         json.dump(info_out, f, indent=4)

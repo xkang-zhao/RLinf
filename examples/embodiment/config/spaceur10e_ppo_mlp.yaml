@@ -105,7 +105,8 @@ actor:
     model_type: mlp_policy
     model_path: ""
     policy_setup: spaceur10e-ee-delta
-    obs_dim: 21
+    # joint_pos(6) + base_pose(7) + ee_pose(7) + target_pose(7)
+    obs_dim: 27
     action_dim: 7
     num_action_chunks: 1
     hidden_dim: 256
