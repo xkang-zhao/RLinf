@@ -18,9 +18,14 @@ hydra:
 cluster:
   num_nodes: 1
   component_placement:
-    # A single A800 is shared in time: rollout and environment workers offload
-    # while the FSDP actor performs its PPO update.
-    actor,env,rollout: all
+    # The actor and rollout model share GPU 0 in time.
+    actor,rollout: 0
+    # Run eight CPU-side EnvWorker processes on this node. With
+    # total_num_envs=8, each worker owns one SpaceUR10e MuJoCo environment,
+    # so the eight tasks step concurrently instead of through one serial loop.
+    env:
+      node_group: node
+      placement: 0:0-7
 
 runner:
   task_type: embodied
@@ -32,10 +37,11 @@ runner:
 
   only_eval: false
   max_epochs: 1000
-  max_steps: 100
+  max_steps: 50
   # Evaluate two random resets per task every ten PPO iterations.
   val_check_interval: 10
-  save_interval: 10
+  # Save only the final checkpoint for this 50-step run.
+  save_interval: 50
   seq_length: 4096
   max_prompt_length: 48
   resume_dir: null
@@ -69,18 +75,19 @@ algorithm:
 env:
   group_name: "EnvGroup"
   train:
-    # Eight vector environments are assigned the eight task names round-robin.
+    # Eight EnvWorker processes assign exactly one environment to each task.
     total_num_envs: 8
     group_size: 1
-    # Four random resets per task give the sparse reward a useful on-policy
-    # batch while retaining only eight concurrent simulator processes.
-    rollout_epoch: 4
+    # Each concurrent environment collects eight independently reset episodes.
+    rollout_epoch: 8
     max_episode_steps: 400
     max_steps_per_rollout_epoch: 400
     auto_reset: false
     ignore_terminations: false
     is_eval: false
     reward_coef: ${algorithm.reward_coef}
+    # Parallelism is provided by cluster.component_placement.env. This field is
+    # currently unused by the SpaceUR10e adapter and remains one intentionally.
     num_env_subprocess: 1
     # SpaceUR10eEnv does not expose RLinf's optional CPU-offload hook.
     enable_offload: false
@@ -116,10 +123,11 @@ rollout:
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  # A 400-step, 8-env, four-epoch rollout yields 1280 Pi0 chunks: five PPO
-  # optimizer updates of 256 samples, accumulated from bf16 micro-batches.
+  # With the default Pi0 10-step horizon, a 400-step, 8-env, eight-epoch
+  # rollout yields 2560 chunks: eight PPO updates of 320 samples. Pi0.5 runs
+  # should override this to 224 together with a 420-step/30-action horizon.
   micro_batch_size: 4
-  global_batch_size: 256
+  global_batch_size: 320
   seed: 1234
   enable_offload: true
 
@@ -131,8 +139,8 @@ actor:
   sft_data_path: "/workspace/my_simulation/dataset/spaceur10e_multitask_lerobot_v21"
   sft_batch_size: 2
   sft_loss_weight: 0.1
-  # Run one SFT batch per global PPO batch (five per iteration), rather than
-  # one expensive three-camera SFT pass for every PPO micro-batch.
+  # Run one SFT batch per global PPO batch, rather than one expensive
+  # three-camera SFT pass for every PPO micro-batch.
   sft_co_train_every_micro_batch: false
 
   model:
@@ -147,8 +155,7 @@ actor:
     adam_eps: 1.0e-8
     clip_grad: 1.0
     weight_decay: 0.01
-    # With five optimizer updates per PPO iteration this warms the value head
-    # for four iterations before enabling the PPO policy loss.
+    # Warm the value head for 20 optimizer steps before enabling PPO policy loss.
     critic_warmup_steps: 20
 
   fsdp_config:
