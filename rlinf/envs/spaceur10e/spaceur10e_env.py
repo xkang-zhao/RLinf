@@ -168,12 +168,22 @@ class SpaceUR10eRLinfEnv(gym.Env):
             )
 
         task_defs = self._resolve_task_definitions()
-        self._env_tasks = [
-            task_defs[(self.seed_offset * num_envs + index) % len(task_defs)]
-            for index in range(num_envs)
-        ]
-        self.envs = [self._make_env(index) for index in range(num_envs)]
-        self.single_action_space = self.envs[0].action_space
+        if bool(_cfg_get(self.cfg, "shard_tasks_by_worker", False)):
+            worker_rank = self.seed_offset % self.total_num_processes
+            worker_task_defs = task_defs[worker_rank :: self.total_num_processes]
+            if not worker_task_defs:
+                worker_task_defs = [task_defs[worker_rank % len(task_defs)]]
+            self._env_tasks = [
+                worker_task_defs[index % len(worker_task_defs)]
+                for index in range(num_envs)
+            ]
+        else:
+            self._env_tasks = [
+                task_defs[(self.seed_offset * num_envs + index) % len(task_defs)]
+                for index in range(num_envs)
+            ]
+        self._num_envs = int(num_envs)
+        self._initialize_simulators(num_envs)
         self.action_space = self.single_action_space
         self.observation_space = self._build_observation_space()
 
@@ -295,6 +305,11 @@ class SpaceUR10eRLinfEnv(gym.Env):
         tasks_module = importlib.import_module("planners.auto_grasp.tasks")
         return list(tasks_module.TASK_NAMES)
 
+    def _initialize_simulators(self, num_envs: int) -> None:
+        """Create the simulation backend and its single-world action space."""
+        self.envs = [self._make_env(index) for index in range(num_envs)]
+        self.single_action_space = self.envs[0].action_space
+
     def _make_env(self, index: int) -> gym.Env:
         """Create one Gym environment with checkout-independent asset paths."""
         task = self._env_tasks[index]
@@ -302,6 +317,9 @@ class SpaceUR10eRLinfEnv(gym.Env):
         kwargs = dict(spec.kwargs or {})
         kwargs["render_mode"] = None
         kwargs["use_depth"] = False
+        kwargs["deterministic_rendering"] = bool(
+            _cfg_get(self.cfg, "deterministic_rendering", False)
+        )
         for key in ("scene_path", "arm_path"):
             configured_path = _cfg_get(self.cfg, key, kwargs.get(key))
             if configured_path is not None:
@@ -354,7 +372,7 @@ class SpaceUR10eRLinfEnv(gym.Env):
     @property
     def num_envs(self) -> int:
         """Return the number of independent environments in this process."""
-        return len(self.envs)
+        return self._num_envs
 
     @property
     def device(self) -> torch.device:
@@ -625,7 +643,19 @@ class SpaceUR10eRLinfEnv(gym.Env):
             terminations.append(bool(terminated))
             truncations.append(bool(truncated))
 
-        obs = self._collate_obs(observations)
+        return self._finish_step(
+            self._collate_obs(observations),
+            info_list,
+            rewards,
+            terminations,
+            truncations,
+            auto_reset=auto_reset,
+        )
+
+    def _finish_step(
+        self, obs, info_list, rewards, terminations, truncations, *, auto_reset
+    ):
+        """Apply shared rewards, metrics and auto-reset to a simulator step."""
         raw_reward = torch.tensor(rewards, dtype=torch.float32, device=self.device)
         reward = (
             raw_reward - self.prev_step_reward if self.use_rel_reward else raw_reward

@@ -1,4 +1,5 @@
-# Multi-task PPO for the eight SpaceUR10e grasping tasks.
+# Pi0.5 multi-task PPO for the eight SpaceUR10e grasping tasks.
+# Launch: bash examples/embodiment/run_embodiment.sh spaceur10e_ppo_openpi_rlinf
 defaults:
   - env/spaceur10e_all_rgb@env.train
   - env/spaceur10e_all_rgb@env.eval
@@ -32,15 +33,15 @@ runner:
   logger:
     log_path: "../results"
     project_name: rlinf
-    experiment_name: "spaceur10e_ppo_pi0_sparse_stable_100"
+    experiment_name: "spaceur10e_pi05_ppo_parallel_100"
     logger_backends: ["tensorboard"]
 
   only_eval: false
   max_epochs: 1000
-  max_steps: 50
+  max_steps: 100
   # Evaluate two random resets per task every ten PPO iterations.
   val_check_interval: 10
-  # Save only the final checkpoint for this 50-step run.
+  # Save only the final checkpoint for this 100-step run.
   save_interval: 50
   seq_length: 4096
   max_prompt_length: 48
@@ -75,13 +76,14 @@ algorithm:
 env:
   group_name: "EnvGroup"
   train:
+    repo_root: "/workspace/SpaceRobotEnv"
     # Eight EnvWorker processes assign exactly one environment to each task.
     total_num_envs: 8
     group_size: 1
     # Each concurrent environment collects eight independently reset episodes.
     rollout_epoch: 8
-    max_episode_steps: 400
-    max_steps_per_rollout_epoch: 400
+    max_episode_steps: 420
+    max_steps_per_rollout_epoch: 420
     auto_reset: false
     ignore_terminations: false
     is_eval: false
@@ -97,11 +99,12 @@ env:
       video_base_dir: ${runner.logger.log_path}/video/train
       fps: 15
   eval:
+    repo_root: "/workspace/SpaceRobotEnv"
     total_num_envs: 8
     group_size: 1
     rollout_epoch: 2
-    max_episode_steps: 400
-    max_steps_per_rollout_epoch: 400
+    max_episode_steps: 420
+    max_steps_per_rollout_epoch: 420
     auto_reset: false
     ignore_terminations: false
     is_eval: true
@@ -114,29 +117,28 @@ env:
 rollout:
   group_name: "RolloutGroup"
   backend: "huggingface"
-  enable_offload: true
+  enable_offload: False
   pipeline_stage_num: 1
   model:
-    model_path: "/workspace/RLinf/logs/spaceur10e_sft_3000/pi0_full_sft_3000/deploy/openpi_rlinf_bf16"
+    model_path: "/zxk/SpaceRobotEnv/spaceur10e_pi05_sft/deploy/openpi_rlinf_bf16"
     precision: ${actor.model.precision}
 
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
-  # With the default Pi0 10-step horizon, a 400-step, 8-env, eight-epoch
-  # rollout yields 2560 chunks: eight PPO updates of 320 samples. Pi0.5 runs
-  # should override this to 224 together with a 420-step/30-action horizon.
-  micro_batch_size: 4
-  global_batch_size: 320
+  # A 420-step, 8-env, eight-epoch rollout with 30-action chunks yields
+  # 896 chunks: seven global batches of 128 samples per update epoch.
+  micro_batch_size: 32
+  global_batch_size: 128
   seed: 1234
-  enable_offload: true
+  enable_offload: False
 
   # Anchor online PPO updates to the original 800-demo multi-task dataset.
   # The explicit small SFT batch avoids loading the data config's SFT batch of
   # 16 alongside each PPO micro-batch on a single 80 GiB GPU.
   config_name: ${actor.model.openpi.config_name}
   enable_sft_co_train: true
-  sft_data_path: "/workspace/my_simulation/dataset/spaceur10e_multitask_lerobot_v21"
+  sft_data_path: "/zxk/SpaceRobot/spaceur10e_multitask_lerobot_v21"
   sft_batch_size: 2
   sft_loss_weight: 0.1
   # Run one SFT batch per global PPO batch, rather than one expensive
@@ -145,6 +147,10 @@ actor:
 
   model:
     model_path: ${rollout.model.model_path}
+    pi05: true
+    num_action_chunks: 30
+    openpi:
+      config_name: pi05_spaceur10e
 
   optim:
     # The former 5e-6 actor LR caused rapid policy drift after SFT.

@@ -150,6 +150,10 @@ def get_env_cls(env_type: str, env_cfg=None):
 
         return PolarisEnv
     elif env_type == SupportedEnvType.SPACEUR10E:
+        if env_cfg is not None and env_cfg.get("physics_backend", "mujoco") == "warp":
+            from rlinf.envs.spaceur10e.spaceur10e_warp_env import SpaceUR10eWarpRLinfEnv
+
+            return SpaceUR10eWarpRLinfEnv
         from rlinf.envs.spaceur10e.spaceur10e_env import SpaceUR10eRLinfEnv
 
         return SpaceUR10eRLinfEnv

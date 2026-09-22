@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import time
+from dataclasses import replace
 from functools import partial
 from typing import Optional
 
@@ -1450,6 +1451,14 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 repo_id=repo_id,
                 data_kwargs=getattr(self.cfg.actor.model, "openpi_data", None),
             )
+            # PPO can tune co-training loader processes independently of SFT.
+            sft_num_workers = self.cfg.actor.get("sft_num_workers", None)
+            if sft_num_workers is not None:
+                if int(sft_num_workers) < 0:
+                    raise ValueError("actor.sft_num_workers must be non-negative")
+                data_loader_config = replace(
+                    data_loader_config, num_workers=int(sft_num_workers)
+                )
             self.data_loader = _data.create_data_loader(
                 data_loader_config, framework="pytorch", shuffle=True
             )

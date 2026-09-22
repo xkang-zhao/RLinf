@@ -30,7 +30,7 @@ runner:
 
 data:
   train_data_paths: "/zxk/SpaceRobot/spaceur10e_multitask_lerobot_v21"
-  num_workers: 4
+  num_workers: 1
 
 actor:
   group_name: "ActorGroup"

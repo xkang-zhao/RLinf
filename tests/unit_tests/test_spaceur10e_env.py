@@ -30,6 +30,21 @@ def test_spaceur10e_is_registered_lazily():
     assert get_env_cls("spaceur10e") is SpaceUR10eRLinfEnv
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_deterministic_rendering_config_reaches_simulator(
+    monkeypatch, tmp_path, enabled
+):
+    env = SpaceUR10eRLinfEnv.__new__(SpaceUR10eRLinfEnv)
+    env.cfg = {"deterministic_rendering": enabled}
+    env.repo_root = tmp_path
+    env._env_tasks = [SimpleNamespace(env_id="Fake-v0")]
+    monkeypatch.setattr(
+        spaceur10e_module.gym, "spec", lambda _: SimpleNamespace(kwargs={})
+    )
+    monkeypatch.setattr(spaceur10e_module.gym, "make", lambda _, **kwargs: kwargs)
+    assert env._make_env(0)["deterministic_rendering"] is enabled
+
+
 def test_source_checkout_fallback_requires_fix0613_package_layout(tmp_path):
     checkout = tmp_path / "my_simulation"
     (checkout / "src" / "envs").mkdir(parents=True)
@@ -211,6 +226,25 @@ def test_rgb_adapter_cycles_task_definitions_and_exposes_three_cameras(
     )
     assert offset_env.instruction == ["Grab the satellite handle"]
     offset_env.close()
+
+    sharded_env = SpaceUR10eRLinfEnv(
+        {
+            "repo_root": str(checkout),
+            "task_names": "all",
+            "shard_tasks_by_worker": True,
+            "obs_mode": "state",
+        },
+        num_envs=3,
+        seed_offset=1,
+        total_num_processes=2,
+        worker_info=None,
+    )
+    assert sharded_env.instruction == [
+        "Grab the satellite handle",
+        "Grab the satellite handle",
+        "Grab the satellite handle",
+    ]
+    sharded_env.close()
 
 
 def test_action_adapter_preserves_rotation_and_clips_all_seven_dims():
